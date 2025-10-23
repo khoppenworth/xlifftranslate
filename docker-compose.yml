@@ -1,0 +1,10 @@
+version: "3.8"
+services:
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    ports:
+      - "5000:5000"
+    environment:
+      - LT_LOAD_ONLY=en,fr,es,de,pt,it,ar,hi,sw,am,zh
+      - LT_DISABLE_FILES_UPLOADS=true
+    restart: unless-stopped

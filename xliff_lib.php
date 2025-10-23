@@ -1,11 +1,11 @@
 <?php
-/**
- * Simple XLIFF 1.2 helper lib (works for many 2.0 files as well in a basic way)
- * - parse_xliff(string $xml): array with meta + units
- * - build_xliff(string $originalXml, array $targetsById, string|null $targetLang): string
- */
-
+function _check_xml_ext(): void {
+    if (!class_exists('DOMDocument')) {
+        throw new RuntimeException("PHP DOM extension not found. Install php-xml and restart Apache.");
+    }
+}
 function parse_xliff(string $xml): array {
+    _check_xml_ext();
     libxml_use_internal_errors(true);
     $dom = new DOMDocument();
     $dom->preserveWhiteSpace = false;
@@ -13,79 +13,52 @@ function parse_xliff(string $xml): array {
     if (!$dom->loadXML($xml, LIBXML_NONET | LIBXML_NOENT | LIBXML_NOWARNING)) {
         throw new RuntimeException("Invalid XML/XLIFF file.");
     }
-
     $xp = new DOMXPath($dom);
     $xp->registerNamespace('x', 'urn:oasis:names:tc:xliff:document:1.2');
     $xp->registerNamespace('x2', 'urn:oasis:names:tc:xliff:document:2.0');
-
-    // Try 1.2 first
     $fileNode = $xp->query('//x:xliff/x:file')->item(0);
     $is12 = true;
-    if (!$fileNode) {
-        // Try 2.0
-        $fileNode = $xp->query('//x2:xliff/x2:file')->item(0);
-        $is12 = false;
-    }
-    if (!$fileNode) {
-        throw new RuntimeException("Could not find <file> element in XLIFF.");
-    }
-
+    if (!$fileNode) { $fileNode = $xp->query('//x2:xliff/x2:file')->item(0); $is12 = false; }
+    if (!$fileNode) throw new RuntimeException("Could not find <file> in XLIFF.");
     $sourceLang = $fileNode->getAttribute($is12 ? 'source-language' : 'srcLang');
     $targetLang = $fileNode->getAttribute($is12 ? 'target-language' : 'trgLang');
-
     $units = [];
     if ($is12) {
         $nodes = $xp->query('//x:trans-unit');
         foreach ($nodes as $node) {
-            /** @var DOMElement $node */
             $id = $node->getAttribute('id') ?: $node->getAttribute('resname');
-            $source = '';
-            $target = '';
-            $sNode = null; $tNode = null;
+            $source=''; $target='';
             foreach ($node->childNodes as $n) {
-                if ($n instanceof DOMElement && $n->tagName === 'source') { $sNode = $n; }
-                if ($n instanceof DOMElement && $n->tagName === 'target') { $tNode = $n; }
+                if ($n instanceof DOMElement && $n->tagName === 'source') $source = inner_xml($n);
+                if ($n instanceof DOMElement && $n->tagName === 'target') $target = inner_xml($n);
             }
-            if ($sNode) $source = inner_xml($sNode);
-            if ($tNode) $target = inner_xml($tNode);
-            $units[] = ['id' => $id, 'source' => $source, 'target' => $target];
+            $units[] = ['id'=>$id,'source'=>$source,'target'=>$target];
         }
     } else {
-        // 2.0 basic support: unit/segment/source|target
-        $nodes = $xp->query('//x2:unit');
-        foreach ($nodes as $unit) {
-            /** @var DOMElement $unit */
+        $unitsNodes = $xp->query('//x2:unit');
+        foreach ($unitsNodes as $unit) {
             $id = $unit->getAttribute('id');
-            $seg = null;
-            foreach ($unit->getElementsByTagName('segment') as $segNode) { $seg = $segNode; break; }
-            if (!$seg) continue;
-            $source = ''; $target = '';
-            foreach ($seg->childNodes as $n) {
-                if ($n instanceof DOMElement && $n->localName === 'source') $source = inner_xml($n);
-                if ($n instanceof DOMElement && $n->localName === 'target') $target = inner_xml($n);
+            $sourceParts=[]; $targetParts=[];
+            foreach ($unit->getElementsByTagName('segment') as $seg) {
+                $src=''; $tgt='';
+                foreach ($seg->childNodes as $n) {
+                    if ($n instanceof DOMElement && $n->localName === 'source') $src = inner_xml($n);
+                    if ($n instanceof DOMElement && $n->localName === 'target') $tgt = inner_xml($n);
+                }
+                $sourceParts[]=$src;
+                $targetParts[]=$tgt;
             }
-            $units[] = ['id' => $id, 'source' => $source, 'target' => $target];
+            $units[]=['id'=>$id,'source'=>implode("\n",$sourceParts),'target'=>implode("\n",$targetParts)];
         }
     }
-
-    return [
-        'is12' => $is12,
-        'sourceLang' => $sourceLang,
-        'targetLang' => $targetLang,
-        'units' => $units,
-        'xml' => $dom->saveXML(),
-    ];
+    return ['is12'=>$is12,'sourceLang'=>$sourceLang,'targetLang'=>$targetLang,'units'=>$units,'xml'=>$dom->saveXML()];
 }
-
 function inner_xml(DOMElement $element): string {
-    $s = '';
-    foreach ($element->childNodes as $child) {
-        $s .= $element->ownerDocument->saveXML($child);
-    }
+    $s=''; foreach ($element->childNodes as $child) { $s .= $element->ownerDocument->saveXML($child); }
     return $s ?: '';
 }
-
 function build_xliff(string $originalXml, array $targetsById, ?string $targetLang = null): string {
+    _check_xml_ext();
     libxml_use_internal_errors(true);
     $dom = new DOMDocument();
     $dom->preserveWhiteSpace = false;
@@ -96,45 +69,33 @@ function build_xliff(string $originalXml, array $targetsById, ?string $targetLan
     $xp = new DOMXPath($dom);
     $xp->registerNamespace('x', 'urn:oasis:names:tc:xliff:document:1.2');
     $xp->registerNamespace('x2', 'urn:oasis:names:tc:xliff:document:2.0');
-
     $fileNode = $xp->query('//x:xliff/x:file')->item(0);
     $is12 = true;
     if (!$fileNode) { $fileNode = $xp->query('//x2:xliff/x2:file')->item(0); $is12 = false; }
     if (!$fileNode) throw new RuntimeException("No <file> in XLIFF.");
-
-    if ($targetLang) {
-        if ($is12) $fileNode->setAttribute('target-language', $targetLang);
-        else $fileNode->setAttribute('trgLang', $targetLang);
-    }
-
+    if ($targetLang) { if ($is12) $fileNode->setAttribute('target-language', $targetLang); else $fileNode->setAttribute('trgLang', $targetLang); }
     if ($is12) {
         $nodes = $xp->query('//x:trans-unit');
         foreach ($nodes as $node) {
-            /** @var DOMElement $node */
             $id = $node->getAttribute('id') ?: $node->getAttribute('resname');
             if (!array_key_exists($id, $targetsById)) continue;
             $targetText = $targetsById[$id];
-
-            // find/create <target>
             $targetEl = null;
             foreach ($node->childNodes as $n) {
                 if ($n instanceof DOMElement && $n->tagName === 'target') { $targetEl = $n; break; }
             }
             if (!$targetEl) {
                 $targetEl = $dom->createElement('target');
-                // Insert target after source if exists
-                $inserted = false;
+                $inserted=false;
                 foreach ($node->childNodes as $n) {
                     if ($n instanceof DOMElement && $n->tagName === 'source') {
                         if ($n->nextSibling) $node->insertBefore($targetEl, $n->nextSibling);
                         else $node->appendChild($targetEl);
-                        $inserted = true;
-                        break;
+                        $inserted=true; break;
                     }
                 }
                 if (!$inserted) $node->appendChild($targetEl);
             }
-            // Replace children with parsed fragment from targetText (supports inline tags)
             while ($targetEl->firstChild) $targetEl->removeChild($targetEl->firstChild);
             if (strlen(trim($targetText)) > 0) {
                 $frag = $dom->createDocumentFragment();
@@ -144,22 +105,16 @@ function build_xliff(string $originalXml, array $targetsById, ?string $targetLan
             }
         }
     } else {
-        // 2.0 basic support
         $units = $xp->query('//x2:unit');
         foreach ($units as $unit) {
             $id = $unit->getAttribute('id');
             if (!array_key_exists($id, $targetsById)) continue;
             $targetText = $targetsById[$id];
             $segment = $unit->getElementsByTagName('segment')->item(0);
-            if (!$segment) continue;
+            if (!$segment) { $segment = $dom->createElementNS('urn:oasis:names:tc:xliff:document:2.0', 'segment'); $unit->appendChild($segment); }
             $targetEl = null;
-            foreach ($segment->childNodes as $n) {
-                if ($n instanceof DOMElement && $n->localName === 'target') { $targetEl = $n; break; }
-            }
-            if (!$targetEl) {
-                $targetEl = $dom->createElementNS('urn:oasis:names:tc:xliff:document:2.0', 'target');
-                $segment->appendChild($targetEl);
-            }
+            foreach ($segment->childNodes as $n) { if ($n instanceof DOMElement && $n->localName === 'target') { $targetEl = $n; break; } }
+            if (!$targetEl) { $targetEl = $dom->createElementNS('urn:oasis:names:tc:xliff:document:2.0', 'target'); $segment->appendChild($targetEl); }
             while ($targetEl->firstChild) $targetEl->removeChild($targetEl->firstChild);
             if (strlen(trim($targetText)) > 0) {
                 $frag = $dom->createDocumentFragment();
@@ -169,6 +124,5 @@ function build_xliff(string $originalXml, array $targetsById, ?string $targetLan
             }
         }
     }
-
     return $dom->saveXML();
 }
