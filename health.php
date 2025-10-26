@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/auth.php';
 header('Content-Type: text/plain; charset=utf-8');
 printf("PHP %s\n", PHP_VERSION);
 printf("DOM extension: %s\n", class_exists('DOMDocument') ? 'YES' : 'NO');
