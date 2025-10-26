@@ -4,11 +4,56 @@
   const srcLang = ()=> ($('#sourceLang')?.value.trim() || '');
   const trgLang = ()=> ($('#targetLang')?.value.trim() || '');
   const provider = ()=> ($('#provider')?.value || '');
-  const snack = (msg)=>{ const el=$('#snackbar'); if(!el) return; el.textContent=msg; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'), 2400); };
+  const snack = (msg)=>{ const el=$('#snackbar'); if(!el) return; el.textContent=msg; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'), 2200); };
   const overlay = { show(){ $('#overlay')?.classList.add('show'); }, hide(){ $('#overlay')?.classList.remove('show'); } };
 
-  $('#navToggle')?.addEventListener('click', ()=> $('#sidebar')?.classList.toggle('open'));
+  const quick = D.createElement('div');
+  quick.className='stack'; quick.innerHTML = `
+    <label class="field"><span>Quick target</span>
+      <select id="langQuick">
+        <option value="">Choose…</option>
+        <optgroup label="Common">
+          <option value="fr">French (fr)</option>
+          <option value="fr-FR">French (fr-FR)</option>
+          <option value="es">Spanish (es)</option>
+          <option value="es-ES">Spanish (es-ES)</option>
+          <option value="en">English (en)</option>
+          <option value="en-US">English (en-US)</option>
+          <option value="en-GB">English (en-GB)</option>
+          <option value="pt-BR">Portuguese (pt-BR)</option>
+        </optgroup>
+      </select>
+    </label>`;
+  const targetInput = $('#targetLang');
+  if (targetInput && !$('#langQuick')) targetInput.closest('.stack')?.appendChild(quick);
+  D.addEventListener('change', (e)=>{
+    if (e.target && e.target.id==='langQuick'){
+      const v = e.target.value || '';
+      const prov = provider();
+      if (prov==='libre' || prov==='google' || prov==='mymemory'){
+        $('#targetLang').value = v ? v.split('-')[0].toLowerCase() : '';
+      } else if (prov==='deepl'){
+        let up = v.toUpperCase();
+        if (['EN-GB','EN-US','PT-BR'].includes(up)) $('#targetLang').value = up;
+        else $('#targetLang').value = up.substring(0,2);
+      } else {
+        const parts = v.split('-');
+        $('#targetLang').value = parts[0].toLowerCase() + (parts[1] ? ('-'+parts[1].toUpperCase()) : '');
+      }
+      snack('Target set to ' + $('#targetLang').value);
+    }
+  });
+
   $('#selAll')?.addEventListener('change', e=> $$('.rowSel').forEach(cb=>cb.checked=e.target.checked));
+
+  const kbar = $('.kbar .left');
+  if (kbar && !$('#btnSelectAll')) {
+    const sel = D.createElement('button'); sel.id='btnSelectAll'; sel.className='btn'; sel.textContent='Select all';
+    const clr = D.createElement('button'); clr.id='btnClearSel'; clr.className='btn'; clr.textContent='Clear';
+    kbar.appendChild(sel); kbar.appendChild(clr);
+    sel.addEventListener('click', ()=> $$('.rowSel').forEach(cb=> cb.checked=true));
+    clr.addEventListener('click', ()=> $$('.rowSel').forEach(cb=> cb.checked=false));
+  }
 
   function visibleRows(){ return $$('tbody tr').filter(tr => tr.offsetParent !== null); }
   function rowToSrcHTML(tr){ const td=tr.querySelector('td.src'); return td?td.innerHTML:''; }
@@ -44,13 +89,11 @@
     const sel=getSelectedRows(); if(sel.length===0){ snack('No rows selected'); return; } translateRows(sel);
   });
 
-  // Per-row translate button
   D.addEventListener('click', (e)=>{
     const btn = e.target.closest?.('.btn-row'); if(!btn) return;
     const tr = btn.closest('tr'); if(!tr) return; translateRows([tr]);
   });
 
-  // Keyboard shortcuts
   D.addEventListener('keydown', async (ev)=>{
     if (ev.altKey && (ev.key==='t'||ev.key==='T')){ ev.preventDefault();
       const ta = D.activeElement?.closest?.('tr'); const tr = ta || $$('tbody tr')[0]; if(tr) translateRows([tr]); }
@@ -59,7 +102,6 @@
       await translateRows([tr]); const rows = $$('tbody tr'); const i = rows.indexOf(tr); if(i>=0 && rows[i+1]) rows[i+1].querySelector('textarea.tgt')?.focus(); }
   });
 
-  // Save
   $('#btnSave')?.addEventListener('click', ()=>{
     const form = D.createElement('form'); form.method='POST'; form.action='index.php';
     const add=(n,v)=>{ const i=D.createElement('input'); i.type='hidden'; i.name=n; i.value=v; form.appendChild(i); };
@@ -68,26 +110,13 @@
     D.body.appendChild(form); form.submit();
   });
 
-  // Export CSV (selected or all)
   $('#btnExportCSV')?.addEventListener('click', ()=>{
     const ids = getSelectedRows().map(tr => tr.querySelector('.idcell')?.textContent.trim()).filter(Boolean);
     const form = D.createElement('form'); form.method='POST'; form.action='export_csv.php';
     const add=(n,v)=>{ const i=D.createElement('input'); i.type='hidden'; i.name=n; i.value=v; form.appendChild(i); };
-    add('csrf', csrf()); ids.forEach(id=> add('ids[]', id)); D.body.appendChild(form); form.submit(); form.remove();
-  });
-
-  // Import CSV
-  $('#importCSV')?.addEventListener('change', async (e)=>{
-    const f = e.target.files?.[0]; if(!f) return;
-    overlay.show();
-    const fd=new FormData(); fd.append('csrf', csrf()); fd.append('csv', f);
-    try{
-      const res = await fetch('import_csv.php',{method:'POST',body:fd}); const j = await res.json();
-      if(!res.ok || j?.ok!==true) throw new Error(j?.error || `HTTP ${res.status}`);
-      snack(`Imported: ${j.updated} updated; ${j.skipped} skipped`);
-      setTimeout(()=> location.reload(), 600);
-    }catch(e){ snack('Import error: '+e.message); }
-    finally{ overlay.hide(); e.target.value=''; }
+    add('csrf', csrf()); ids.forEach(id=> add('ids[]', id));
+    $$('textarea.tgt').forEach(t=>{ const hid=D.createElement('input'); hid.type='hidden'; hid.name=`tgt[${t.dataset.id}]`; hid.value=t.value; form.appendChild(hid); });
+    D.body.appendChild(form); form.submit(); setTimeout(()=>form.remove(), 1000);
   });
 
 })();

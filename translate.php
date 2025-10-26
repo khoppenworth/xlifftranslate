@@ -21,8 +21,36 @@ if (!hash_equals($_SESSION['csrf'] ?? '', $csrf)) { http_response_code(400); ech
 if ($target==='') { http_response_code(400); echo json_encode(['error'=>'Missing target language']); exit; }
 if (!is_array($texts)) { http_response_code(400); echo json_encode(['error'=>'Bad payload']); exit; }
 
-$norm=[]; foreach($texts as $t){ $norm[]=(string)$t; }
 $translator = $overrideProvider ?: strtolower(trim((string)($cfg['translator'] ?? 'libre')));
+
+function norm2($code){ $code=str_replace('_','-',trim($code)); if($code==='') return ''; $parts=explode('-',$code,2); return strtolower($parts[0]); }
+function normalize_lang($provider,$code,$isTarget=true){
+  $code = str_replace('_','-',trim($code));
+  if ($provider==='libre' || $provider==='google' || $provider==='mymemory') {
+    return strtolower(explode('-',$code,2)[0]);
+  }
+  if ($provider==='deepl') {
+    $up = strtoupper($code);
+    $whitelist = ['EN','EN-GB','EN-US','PT','PT-BR','ES','FR','DE','IT','NL','PL','RU','JA','ZH'];
+    if (in_array($up,$whitelist,true)) return $up;
+    if ($up==='EN-UK') return 'EN-GB';
+    if (preg_match('/^([A-Z]{2})-([A-Z]{2})$/',$up,$m)) {
+      if (in_array($up,$whitelist,true)) return $up;
+      return $m[1];
+    }
+    return substr($up,0,2);
+  }
+  if ($provider==='azure') {
+    $parts=explode('-',$code,2);
+    return strtolower($parts[0]).(isset($parts[1])?('-'.strtoupper($parts[1])):'');
+  }
+  return norm2($code);
+}
+
+$sourceN = $source ? normalize_lang($translator,$source,false) : '';
+$targetN = normalize_lang($translator,$target,true);
+
+$norm=[]; foreach($texts as $t){ $norm[]=(string)$t; }
 $maxCharsReq = (int)($cfg['max_chars_per_request'] ?? 25000);
 $total=0; foreach($norm as $t) $total += mb_strlen($t,'UTF-8');
 
@@ -42,14 +70,13 @@ function do_translate($translator,$texts,$source,$target,$cfg){
 }
 if ($total > $maxCharsReq){
   $out=[]; $chunk=[]; $sum=0; $limit=max(1,(int)($maxCharsReq*0.9));
-  foreach($norm as $t){ $len=mb_strlen($t,'UTF-8'); if($sum+$len>$limit && $chunk){ $out=array_merge($out,do_translate($translator,$chunk,$source,$target,$cfg)); $chunk=[]; $sum=0; } $chunk[]=$t; $sum+=$len; }
-  if($chunk) $out=array_merge($out,do_translate($translator,$chunk,$source,$target,$cfg));
-} else { $out=do_translate($translator,$norm,$source,$target,$cfg); }
+  foreach($norm as $t){ $len=mb_strlen($t,'UTF-8'); if($sum+$len>$limit && $chunk){ $out=array_merge($out,do_translate($translator,$chunk,$sourceN,$targetN,$cfg)); $chunk=[]; $sum=0; } $chunk[]=$t; $sum+=$len; }
+  if($chunk) $out=array_merge($out,do_translate($translator,$chunk,$sourceN,$targetN,$cfg));
+} else { $out=do_translate($translator,$norm,$sourceN,$targetN,$cfg); }
 $out=array_values($out);
 if (count($out)!==count($norm)){ $out = (count($out)<count($norm)) ? array_pad($out, count($norm), '') : array_slice($out,0,count($norm)); }
 echo json_encode(['translations'=>$out]);
 
-# --- Providers ---
 function translate_libre(array $texts,string $source,string $target,array $cfg): array {
   $endpoint=rtrim((string)($cfg['libre_endpoint'] ?? 'http://localhost:5000'),'/');
   $apiKey=trim((string)($cfg['libre_api_key'] ?? ''));
@@ -68,8 +95,7 @@ function libre_call_with_retry($endpoint,$apiKey,$q,$source,$target,$delayMs){
   while(true){
     [$http,$resp,$err]=http_json("$endpoint/translate",'POST',['Content-Type: application/json'], json_encode($payload, JSON_UNESCAPED_UNICODE));
     if ($resp!==false && $http>=200 && $http<300){ $j=json_decode($resp,true); if($delayMs>0) usleep($delayMs*1000); return (string)($j['translatedText'] ?? ''); }
-    $attempts++; if($attempts>=$max){ return ''; }
-    usleep(($sleep + 400*$attempts)*1000);
+    $attempts++; if($attempts>=$max){ return ''; } usleep(($sleep + 400*$attempts)*1000);
   }
 }
 function split_text_for_limit(string $text,int $maxChars): array {
@@ -82,7 +108,7 @@ function split_text_for_limit(string $text,int $maxChars): array {
 function translate_deepl(array $texts,string $source,string $target,array $cfg): array {
   $endpoint=(string)($cfg['deepl_endpoint'] ?? 'https://api-free.deepl.com/v2/translate');
   $key=trim((string)($cfg['deepl_api_key'] ?? '')); if($key==='') return array_map(fn($t)=>$t,$texts);
-  $post=['target_lang'=>strtoupper($target)]; if($source) $post['source_lang']=strtoupper($source);
+  $post=['target_lang'=>$target]; if($source) $post['source_lang']=$source;
   foreach($texts as $t) $post['text'][]=$t;
   [$http,$resp,$err]=http_json($endpoint,'POST',['Authorization: DeepL-Auth-Key '.$key,'Content-Type: application/x-www-form-urlencoded'], http_build_query($post));
   if($resp===false || $http>=400) return array_map(fn($t)=>$t,$texts);
