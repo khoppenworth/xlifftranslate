@@ -5,18 +5,31 @@ if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
 
 $err=''; $info=''; $parsed = $_SESSION['parsed'] ?? null;
 $cfg = cfg();
+
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 function http_json($url, $method='POST', $headers=[], $body=null) {
   $ch = curl_init($url);
-  curl_setopt_array($ch, [CURLOPT_CUSTOMREQUEST=>$method, CURLOPT_RETURNTRANSFER=>true, CURLOPT_HTTPHEADER=>$headers, CURLOPT_POSTFIELDS=>$body, CURLOPT_TIMEOUT=>30]);
-  $resp = curl_exec($ch); $http = curl_getinfo($ch, CURLINFO_HTTP_CODE); $err  = curl_error($ch); curl_close($ch); return [$http,$resp,$err];
+  curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST => $method,
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER => $headers,
+    CURLOPT_POSTFIELDS => $body,
+    CURLOPT_TIMEOUT => 30,
+  ]);
+  $resp = curl_exec($ch);
+  $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $err  = curl_error($ch);
+  curl_close($ch);
+  return [$http, $resp, $err];
 }
+// Basic sanitize for display
 function sanitize_fragment($html){
   $html = preg_replace('~<\s*(script|style)[^>]*>.*?<\s*/\s*\1\s*>~is', '', $html ?? '');
   $html = preg_replace('/\son[a-z]+\s*=\s*(\"[^\"]*\"|\'[^\']*\'|[^\s>]+)/i', '', $html);
-  $html = preg_replace('/(href|src)\s*=\s*([\'\"] )javascript:[^\\2]*\\2/i', '', $html);
+  $html = preg_replace('/(href|src)\s*=\s*([\'\"])javascript:[^\\2]*\\2/i', '', $html);
   return $html;
 }
+// Upload/edit allowed for editor+
 $canEdit = (current_role() !== 'viewer');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) {
@@ -25,8 +38,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && hash_equ
     if (!isset($_FILES['xliff']) || $_FILES['xliff']['error'] !== UPLOAD_ERR_OK) { $err = 'Please upload a valid XLIFF file.'; }
     else {
       $maxMb = (int)($cfg['max_upload_mb'] ?? 10);
-      if ($_FILES['xliff']['size'] > $maxMb * 1024 * 1024) { $err = 'File too large. Limit is '.$maxMb.' MB.'; }
-      else {
+      if ($_FILES['xliff']['size'] > $maxMb * 1024 * 1024) {
+        $err = 'File too large. Limit is '.$maxMb.' MB.';
+      } else {
         $name = strtolower($_FILES['xliff']['name'] ?? '');
         if (!preg_match('/\.(xlf|xliff|xml)$/i', $name)) { $err = 'Invalid file type. Upload .xlf/.xliff/.xml'; }
         else {
@@ -85,24 +99,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && hash_equ
     </form>
   </section>
 
-  <?php $parsed = $_SESSION['parsed'] ?? null; if ($parsed): $srcLang = strtolower($parsed['sourceLang'] ?: 'en'); $trgLang = strtolower($parsed['targetLang'] ?: 'fr'); $langs = ['en'=>'English','fr'=>'French','es'=>'Spanish']; ?>
+  <?php $parsed = $_SESSION['parsed'] ?? null; if ($parsed): $srcLang = $parsed['sourceLang'] ?: ''; $trgLang = $parsed['targetLang'] ?: ''; ?>
   <section class="card">
     <h2>Review & Translate</h2>
     <div class="controls">
-      <label>Source
-        <select id="sourceLang" <?= $canEdit ? '' : 'disabled' ?>>
-          <?php foreach ($langs as $code=>$label): ?>
-            <option value="<?=h($code)?>" <?= $srcLang===$code?'selected':'' ?>><?=h($code)?> — <?=h($label)?></option>
-          <?php endforeach; ?>
-        </select>
-      </label>
-      <label>Target
-        <select id="targetLang" <?= $canEdit ? '' : 'disabled' ?>>
-          <?php foreach ($langs as $code=>$label): ?>
-            <option value="<?=h($code)?>" <?= $trgLang===$code?'selected':'' ?>><?=h($code)?> — <?=h($label)?></option>
-          <?php endforeach; ?>
-        </select>
-      </label>
+      <label>Source <input type="text" id="sourceLang" value="<?=h($srcLang)?>" placeholder="en-US" <?= $canEdit ? '' : 'disabled' ?>></label>
+      <label>Target <input type="text" id="targetLang" value="<?=h($trgLang)?>" placeholder="fr-FR" <?= $canEdit ? '' : 'disabled' ?>></label>
       <label>Provider
         <select id="provider" <?= $canEdit ? '' : 'disabled' ?>>
           <option value="">(default: <?=h($cfg['translator'])?>)</option>
@@ -187,6 +189,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && hash_equ
   <?php endif; ?>
 </main>
 
+<!-- Clipboard modal -->
 <div id="clipModal" class="modal" hidden>
   <div class="modal-content">
     <h3 id="clipTitle">Clipboard</h3>
