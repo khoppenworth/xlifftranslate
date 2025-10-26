@@ -1,4 +1,5 @@
 <?php
+// Drop-in replacement for v5.2 translate.php (only translate_libre changed to preserve 1:1 mapping)
 require_once __DIR__ . '/auth.php'; require_login('editor');
 require_once __DIR__ . '/rate_limit.php';
 header('Content-Type: application/json');
@@ -73,18 +74,23 @@ function http_json($url, $method='POST', $headers=[], $body=null) {
   return [$http, $resp, $err];
 }
 
+// FIXED: preserve 1:1 mapping (one output per input)
+// For each input text, split into parts for Libre limits, translate each part, then JOIN parts back.
 function translate_libre(array $texts, string $source, string $target, array $cfg): array {
   $endpoint = rtrim((string)($cfg['libre_endpoint'] ?? 'http://localhost:5000'), '/');
   $apiKey   = trim((string)($cfg['libre_api_key'] ?? ''));
   $maxChars = max(1000, (int)($cfg['libre_max_chars_per_call'] ?? 8000));
   $delayMs  = max(0, (int)($cfg['libre_delay_ms'] ?? 0));
-  $out = [];
+  $outputs = [];
   foreach ($texts as $t) {
-    foreach (split_text_for_limit($t, $maxChars) as $part) {
-      $out[] = libre_call_with_retry($endpoint, $apiKey, $part, $source, $target, $delayMs);
+    $parts = split_text_for_limit($t, $maxChars);
+    $translatedParts = [];
+    foreach ($parts as $part) {
+      $translatedParts.append(libre_call_with_retry($endpoint, $apiKey, $part, $source, $target, $delayMs));
     }
+    $outputs[] = implode('', $translatedParts);
   }
-  return $out;
+  return $outputs;
 }
 
 function libre_call_with_retry($endpoint, $apiKey, $q, $source, $target, $delayMs) {
