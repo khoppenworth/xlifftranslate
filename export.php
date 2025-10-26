@@ -1,5 +1,5 @@
 <?php
-session_start(); require_once __DIR__ . '/auth.php'; require_login();
+require_once __DIR__ . '/auth.php'; require_login('viewer');
 require_once __DIR__ . '/xliff_lib.php';
 if (!hash_equals($_SESSION['csrf'] ?? '', $_GET['csrf'] ?? '')) { http_response_code(400); echo "Bad CSRF"; exit; }
 $parsed = $_SESSION['parsed'] ?? null; $targets = $_SESSION['targets'] ?? [];

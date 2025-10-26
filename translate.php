@@ -1,6 +1,18 @@
 <?php
-session_start();
+require_once __DIR__ . '/auth.php'; require_login('editor');
+require_once __DIR__ . '/rate_limit.php';
 header('Content-Type: application/json');
+
+$cfg = cfg();
+$rl = $cfg['rate_limit'] ?? ['translate_per_minute'=>60, 'burst'=>30];
+$cap = max(1, ((int)($rl['translate_per_minute'] ?? 60)) + (int)($rl['burst'] ?? 0));
+$ppm = max(1, (int)($rl['translate_per_minute'] ?? 60));
+if (!rate_limit_allow('translate', $cap, $ppm)) {
+  http_response_code(429);
+  echo json_encode(['error'=>'Rate limit exceeded. Please slow down.']);
+  exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); echo json_encode(['error'=>'POST only']); exit; }
 
 $payload = json_decode(file_get_contents('php://input'), true);
@@ -13,7 +25,6 @@ if (!hash_equals($_SESSION['csrf'] ?? '', $csrf)) { http_response_code(400); ech
 if (!$target) { http_response_code(400); echo json_encode(['error'=>'Missing target language']); exit; }
 if (!$texts)  { echo json_encode(['translations'=>[]]); exit; }
 
-$cfg = require __DIR__ . '/config.php';
 $translator = $overrideProvider ?: strtolower(trim((string)($cfg['translator'] ?? 'libre')));
 $maxCharsReq = (int)($cfg['max_chars_per_request'] ?? 25000);
 
