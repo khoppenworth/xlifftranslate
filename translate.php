@@ -1,25 +1,46 @@
 <?php
 require_once __DIR__ . '/auth.php'; require_login('editor');
 require_once __DIR__ . '/rate_limit.php';
-header('Content-Type: application/json');
+@ini_set('display_errors','0'); error_reporting(E_ALL);
+header('Content-Type: application/json; charset=utf-8');
+ob_start();
+
+function json_fail($code, $msg, $extra = []){
+  http_response_code($code);
+  $out = array_merge(['error'=>$msg], $extra);
+  $json = json_encode($out, JSON_UNESCAPED_UNICODE);
+  if ($json === false) { $json = '{"error":"JSON encode failed"}'; }
+  // Clean any previous output and print JSON only
+  while (ob_get_level()) { ob_end_clean(); }
+  echo $json; exit;
+}
+set_exception_handler(function($e){ json_fail(500, 'Exception: '.$e->getMessage()); });
+set_error_handler(function($severity,$message,$file,$line){
+  // Convert any notice/warning into JSON
+  json_fail(500, 'PHP error: '.$message, ['where'=>basename($file).':'.$line]);
+});
 
 $cfg = cfg();
 $rl = $cfg['rate_limit'] ?? ['translate_per_minute'=>60, 'burst'=>30];
 $cap = max(1, ((int)($rl['translate_per_minute'] ?? 60)) + (int)($rl['burst'] ?? 0));
 $ppm = max(1, (int)($rl['translate_per_minute'] ?? 60));
-if (!rate_limit_allow('translate', $cap, $ppm)) { http_response_code(429); echo json_encode(['error'=>'Rate limit exceeded']); exit; }
+if (!rate_limit_allow('translate', $cap, $ppm)) json_fail(429, 'Rate limit exceeded');
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); echo json_encode(['error'=>'POST only']); exit; }
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') json_fail(405, 'POST only');
 
-$payload = json_decode(file_get_contents('php://input'), true);
+$raw = file_get_contents('php://input');
+$payload = json_decode($raw, true);
+if (!is_array($payload)) json_fail(400, 'Bad JSON body');
 $clientIds   = $payload['ids'] ?? [];
 $source = trim((string)($payload['source'] ?? ''));
 $target = trim((string)($payload['target'] ?? ''));
 $csrf   = $payload['csrf'] ?? '';
 $overrideProvider = strtolower(trim((string)($payload['provider'] ?? '')));
-if (!hash_equals($_SESSION['csrf'] ?? '', $csrf)) { http_response_code(400); echo json_encode(['error'=>'Bad CSRF']); exit; }
-if ($target==='') { http_response_code(400); echo json_encode(['error'=>'Missing target language']); exit; }
-if (!is_array($clientIds)) { http_response_code(400); echo json_encode(['error'=>'Bad ids']); exit; }
+
+if (!hash_equals($_SESSION['csrf'] ?? '', $csrf)) json_fail(400, 'Bad CSRF');
+if ($target==='') json_fail(400, 'Missing target language');
+if (!is_array($clientIds)) json_fail(400, 'Bad ids');
+if (empty($clientIds)) json_fail(400, 'No ids provided');
 
 $translator = $overrideProvider ?: strtolower(trim((string)($cfg['translator'] ?? 'libre')));
 
@@ -46,12 +67,14 @@ function strip_xliff_inline($html){
   $html = preg_replace('~<x\b[^>]*/>~i', '', $html);
   return $html;
 }
+if (!function_exists('curl_init')) json_fail(500, 'cURL extension not available');
 
 $parsed = $_SESSION['parsed'] ?? null;
-if (!$parsed) { http_response_code(400); echo json_encode(['error'=>'No XLIFF loaded']); exit; }
+if (!$parsed) json_fail(400, 'No XLIFF loaded');
 
 $mapSrc = []; foreach (($parsed['units'] ?? []) as $u) { $mapSrc[$u['id']] = (string)($u['source'] ?? ''); }
 $texts = []; foreach ($clientIds as $id) { $src = $mapSrc[$id] ?? ''; $texts[] = strip_xliff_inline($src); }
+if (!count($texts)) json_fail(400, 'No matching ids in current XLIFF');
 
 $maxCharsReq = (int)($cfg['max_chars_per_request'] ?? 25000);
 $total=0; foreach($texts as $t) $total += mb_strlen($t,'UTF-8');
@@ -78,4 +101,7 @@ if ($total > $maxCharsReq){
 } else { $out=do_translate($translator,$texts,$sourceN,$targetN,$cfg); }
 $out=array_values($out);
 if (count($out)!==count($texts)){ $out = (count($out)<count($texts)) ? array_pad($out, count($texts), '') : array_slice($out,0,count($texts)); }
-echo json_encode(['translations'=>$out]);
+
+while (ob_get_level()) { ob_end_clean(); }
+echo json_encode(['translations'=>$out], JSON_UNESCAPED_UNICODE);
+exit;
