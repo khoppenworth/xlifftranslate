@@ -4,21 +4,16 @@ require_once __DIR__ . '/rate_limit.php';
 @ini_set('display_errors','0'); error_reporting(E_ALL);
 header('Content-Type: application/json; charset=utf-8');
 ob_start();
-
 function json_fail($code, $msg, $extra = []){
   http_response_code($code);
   $out = array_merge(['error'=>$msg], $extra);
   $json = json_encode($out, JSON_UNESCAPED_UNICODE);
   if ($json === false) { $json = '{"error":"JSON encode failed"}'; }
-  // Clean any previous output and print JSON only
   while (ob_get_level()) { ob_end_clean(); }
   echo $json; exit;
 }
 set_exception_handler(function($e){ json_fail(500, 'Exception: '.$e->getMessage()); });
-set_error_handler(function($severity,$message,$file,$line){
-  // Convert any notice/warning into JSON
-  json_fail(500, 'PHP error: '.$message, ['where'=>basename($file).':'.$line]);
-});
+set_error_handler(function($severity,$message,$file,$line){ json_fail(500, 'PHP error: '.$message, ['where'=>basename($file).':'.$line]); });
 
 $cfg = cfg();
 $rl = $cfg['rate_limit'] ?? ['translate_per_minute'=>60, 'burst'=>30];
@@ -28,19 +23,16 @@ if (!rate_limit_allow('translate', $cap, $ppm)) json_fail(429, 'Rate limit excee
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') json_fail(405, 'POST only');
 
-$raw = file_get_contents('php://input');
-$payload = json_decode($raw, true);
+$raw = file_get_contents('php://input'); $payload = json_decode($raw, true);
 if (!is_array($payload)) json_fail(400, 'Bad JSON body');
 $clientIds   = $payload['ids'] ?? [];
 $source = trim((string)($payload['source'] ?? ''));
 $target = trim((string)($payload['target'] ?? ''));
 $csrf   = $payload['csrf'] ?? '';
 $overrideProvider = strtolower(trim((string)($payload['provider'] ?? '')));
-
 if (!hash_equals($_SESSION['csrf'] ?? '', $csrf)) json_fail(400, 'Bad CSRF');
 if ($target==='') json_fail(400, 'Missing target language');
-if (!is_array($clientIds)) json_fail(400, 'Bad ids');
-if (empty($clientIds)) json_fail(400, 'No ids provided');
+if (!is_array($clientIds) || empty($clientIds)) json_fail(400, 'No ids provided');
 
 $translator = $overrideProvider ?: strtolower(trim((string)($cfg['translator'] ?? 'libre')));
 
@@ -93,7 +85,6 @@ function do_translate($translator,$texts,$source,$target,$cfg){
     case 'mock': default: return array_map(function($t) use($target){ return trim($t)===''?'':("[MOCK-$target] ".$t); }, $texts);
   }
 }
-
 if ($total > $maxCharsReq){
   $out=[]; $chunk=[]; $sum=0; $limit=max(1,(int)($maxCharsReq*0.9));
   foreach($texts as $t){ $len=mb_strlen($t,'UTF-8'); if($sum+$len>$limit && $chunk){ $out=array_merge($out,do_translate($translator,$chunk,$sourceN,$targetN,$cfg)); $chunk=[]; $sum=0; } $chunk[]=$t; $sum+=$len; }

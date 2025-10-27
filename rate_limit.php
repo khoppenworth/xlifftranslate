@@ -1,9 +1,18 @@
 <?php
-require_once __DIR__ . '/auth.php';
-function rl_file($bucket,$ip){ $d=rtrim(cfg()['rate_limit']['storage_dir'] ?? sys_get_temp_dir(),'/'); return $d."/xliff_v6_".preg_replace('/[^a-z0-9_\-]/i','_',$bucket)."_".preg_replace('/[^a-z0-9_\-:\.]/i','_',$ip).".json"; }
-function rate_limit_allow($bucket,$capacity,$refillPerMin){
-  $ip=$_SERVER['REMOTE_ADDR'] ?? 'unknown'; $f=rl_file($bucket,$ip); $now=microtime(true);
-  $st=['tokens'=>$capacity,'updated'=>$now]; if (is_file($f)){ $j=@file_get_contents($f); if($j) $st=json_decode($j,true) ?: $st;
-    $elapsed=max(0.0, $now-($st['updated']??$now)); $st['tokens']=min($capacity, ($st['tokens']??$capacity)+$elapsed*($refillPerMin/60.0)); $st['updated']=$now;}
-  if ($st['tokens']<1.0){ @file_put_contents($f,json_encode($st)); return false; } $st['tokens']-=1.0; @file_put_contents($f,json_encode($st)); return true;
+if(!function_exists('rate_limit_allow')){
+  function rate_limit_allow($bucket, $cap=60, $per_minute=60){
+    $now = time();
+    $key = 'rl_'.$bucket;
+    $state = $_SESSION[$key] ?? ['tokens'=>$cap, 'ts'=>$now];
+    $elapsed = max(0, $now - $state['ts']);
+    $state['tokens'] = min($cap, $state['tokens'] + ($elapsed * $per_minute)/60.0);
+    $state['ts'] = $now;
+    if ($state['tokens'] >= 1){
+      $state['tokens'] -= 1;
+      $_SESSION[$key] = $state;
+      return true;
+    }
+    $_SESSION[$key] = $state;
+    return false;
+  }
 }
