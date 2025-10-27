@@ -1,7 +1,7 @@
 <?php
 require_once __DIR__ . '/auth.php'; require_login('viewer');
 require_once __DIR__ . '/xliff_lib.php';
-$cfg = cfg(); $csrf = ensure_csrf();
+$cfg = cfg(); $csrf = ensure_csrf(); $u = current_user();
 
 $err = null; $ok = null;
 
@@ -29,48 +29,40 @@ $units = $parsed['units'] ?? [];
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?=htmlspecialchars($cfg['app_name'])?></title>
 <link rel="stylesheet" href="assets/css/material.css">
-<style>
-  .table{width:100%; border-collapse:collapse}
-  .table th,.table td{border-bottom:1px solid #eee; padding:8px; vertical-align:top}
-  .idcell{font-family:ui-monospace,Consolas,monospace; font-size:12px; color:#555}
-  textarea.tgt{width:100%; min-height:70px; resize:vertical}
-  .src{max-width:520px; white-space:pre-wrap}
-  .kbar{position:sticky; top:0; background:#fff; padding:8px; border-bottom:1px solid #eee; z-index:5; display:flex; gap:8px; align-items:center; justify-content:space-between}
-  .stack{display:flex; flex-direction:column; gap:6px; min-width:200px}
-  .btn{padding:8px 12px; border-radius:10px; border:1px solid #ddd; background:#fafafa; cursor:pointer}
-  .btn.primary{background:#3b82f6; color:#fff; border-color:#3b82f6}
-  .toolbar .left,.toolbar .right{display:flex; gap:8px; align-items:center}
-  .chip{display:inline-block; padding:3px 8px; background:#eef; color:#334; border-radius:999px; font-size:12px}
-  #snackbar{position:fixed; left:50%; transform:translateX(-50%); bottom:22px; background:#222; color:#fff; padding:10px 14px; border-radius:10px; opacity:0; transition:.25s; z-index:50}
-  #snackbar.show{opacity:1}
-  #overlay{position:fixed; inset:0; background:rgba(255,255,255,.6); display:none; align-items:center; justify-content:center; z-index:40}
-  #overlay.show{display:flex}
-</style>
 </head>
 <body>
 <header class="appbar">
   <div class="title"><?=htmlspecialchars($cfg['app_name'])?></div>
-  <div class="actions"><a class="chip" href="health.php">health</a></div>
+  <nav class="nav">
+    <span class="muted">Signed in as <strong><?=htmlspecialchars($u['username']??'')?></strong> (<?=htmlspecialchars($u['role']??'viewer')?>)</span>
+    <a class="chip" href="health.php">health</a>
+    <a class="chip" href="logout.php">logout</a>
+  </nav>
 </header>
 
-<main class="container">
-  <?php if($err): ?><div class="card warn"><?=$err?></div><?php endif; ?>
-  <?php if($ok): ?><div class="card ok"><?=$ok?></div><?php endif; ?>
-
-  <form class="card" method="post" enctype="multipart/form-data">
+<main class="container grid">
+  <section class="card">
     <h3>Upload XLIFF</h3>
-    <input type="hidden" name="csrf" value="<?=$csrf?>">
-    <input type="hidden" name="action" value="upload">
-    <input type="file" name="xlf" accept=".xlf,.xliff,application/xml" required>
-    <div><button class="btn primary" type="submit">Load</button></div>
-    <p class="muted">Requires PHP DOM extension (php-xml).</p>
-  </form>
+    <?php if($err): ?><div class="card warn"><?=$err?></div><?php endif; ?>
+    <?php if($ok): ?><div class="card ok"><?=$ok?></div><?php endif; ?>
+    <form method="post" enctype="multipart/form-data" class="grid2">
+      <input type="hidden" name="csrf" value="<?=$csrf?>">
+      <input type="hidden" name="action" value="upload">
+      <label class="field"><span>File</span>
+        <input type="file" name="xlf" accept=".xlf,.xliff,application/xml" required>
+      </label>
+      <div class="row">
+        <button class="btn primary" type="submit">Load</button>
+      </div>
+      <p class="muted">Requires PHP DOM extension (php-xml).</p>
+    </form>
+  </section>
 
   <section class="card">
     <h3>Translate</h3>
     <div class="toolbar">
       <div class="left">
-        <label class="stack"><span>Provider</span>
+        <label class="field"><span>Provider</span>
           <select id="provider">
             <option value="libre">LibreTranslate</option>
             <option value="deepl">DeepL</option>
@@ -80,10 +72,10 @@ $units = $parsed['units'] ?? [];
             <option value="mock">Mock</option>
           </select>
         </label>
-        <label class="stack"><span>Source lang</span>
+        <label class="field"><span>Source lang</span>
           <input id="sourceLang" placeholder="auto or en" value="auto">
         </label>
-        <label class="stack"><span>Target lang</span>
+        <label class="field"><span>Target lang</span>
           <input id="targetLang" placeholder="fr / fr-FR / EN-GB">
         </label>
       </div>
@@ -95,7 +87,9 @@ $units = $parsed['units'] ?? [];
         <div class="right">
           <button id="btnTranslateSel" class="btn">Translate Selected</button>
           <button id="btnTranslateAll" class="btn primary">Translate ALL</button>
+          <?php if(has_role('editor')): ?>
           <button id="btnSave" class="btn">Save</button>
+          <?php endif; ?>
           <button id="btnExportCSV" class="btn">Export CSV</button>
           <a id="btnExportXLF" class="btn" href="export.php?csrf=<?=$csrf?>">Download XLIFF</a>
         </div>
@@ -103,36 +97,47 @@ $units = $parsed['units'] ?? [];
     </div>
   </section>
 
-  <input type="hidden" name="csrf" value="<?=$csrf?>">
+  <section class="card col-span-2">
+    <h3>Segments</h3>
+    <div class="scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="selAll"></th>
+            <th style="width:220px">ID</th>
+            <th>Source</th>
+            <th>Target</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach($units as $u):
+            $id = htmlspecialchars($u['id']);
+            $src = $u['source'];
+            $tgt = htmlspecialchars($_SESSION['targets'][$u['id']] ?? $u['target'] ?? '');
+          ?>
+          <tr>
+            <td><input class="rowSel" type="checkbox"></td>
+            <td class="idcell"><?=$id?></td>
+            <td class="src"><?=$src?></td>
+            <td><textarea class="tgt" data-id="<?=$id?>"><?=$tgt?></textarea></td>
+            <td><button class="btn btn-row" type="button">Translate</button></td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </section>
 
   <section class="card">
-    <h3>Segments</h3>
-    <table class="table">
-      <thead>
-        <tr>
-          <th><input type="checkbox" id="selAll"></th>
-          <th style="width:200px">ID</th>
-          <th>Source</th>
-          <th>Target</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        <?php foreach($units as $u):
-          $id = htmlspecialchars($u['id']);
-          $src = $u['source']; // HTML safe: it's inner XML
-          $tgt = htmlspecialchars($_SESSION['targets'][$u['id']] ?? $u['target'] ?? '');
-        ?>
-        <tr>
-          <td><input class="rowSel" type="checkbox"></td>
-          <td class="idcell"><?=$id?></td>
-          <td class="src"><?=$src?></td>
-          <td><textarea class="tgt" data-id="<?=$id?>"><?=$tgt?></textarea></td>
-          <td><button class="btn btn-row" type="button">Translate</button></td>
-        </tr>
-        <?php endforeach; ?>
-      </tbody>
-    </table>
+    <h3>Import CSV targets</h3>
+    <form action="import_csv.php" method="post" enctype="multipart/form-data" class="grid2">
+      <input type="hidden" name="csrf" value="<?=$csrf?>">
+      <label class="field"><span>CSV file (id,source,target)</span>
+        <input type="file" name="csv" accept=".csv" required>
+      </label>
+      <div class="row"><button class="btn" type="submit">Import</button></div>
+    </form>
   </section>
 </main>
 

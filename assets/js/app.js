@@ -16,23 +16,22 @@
   (function ensureQuickTarget(){
     const targetInput = $('#targetLang');
     if (!targetInput || $('#langQuick')) return;
-    const wrap = D.createElement('div'); wrap.className='stack'; wrap.innerHTML=`
-      <label class="field"><span>Quick target</span>
-        <select id="langQuick">
-          <option value="">Choose…</option>
-          <optgroup label="Common">
-            <option value="fr">French (fr)</option>
-            <option value="fr-FR">French (fr-FR)</option>
-            <option value="es">Spanish (es)</option>
-            <option value="es-ES">Spanish (es-ES)</option>
-            <option value="en">English (en)</option>
-            <option value="en-US">English (en-US)</option>
-            <option value="en-GB">English (en-GB)</option>
-            <option value="pt-BR">Portuguese (pt-BR)</option>
-          </optgroup>
-        </select>
-      </label>`;
-    targetInput.closest('.left')?.appendChild(wrap);
+    const wrap = D.createElement('div'); wrap.className='field'; wrap.innerHTML=`
+      <span>Quick target</span>
+      <select id="langQuick">
+        <option value="">Choose…</option>
+        <optgroup label="Common">
+          <option value="fr">French (fr)</option>
+          <option value="fr-FR">French (fr-FR)</option>
+          <option value="es">Spanish (es)</option>
+          <option value="es-ES">Spanish (es-ES)</option>
+          <option value="en">English (en)</option>
+          <option value="en-US">English (en-US)</option>
+          <option value="en-GB">English (en-GB)</option>
+          <option value="pt-BR">Portuguese (pt-BR)</option>
+        </optgroup>
+      </select>`;
+    targetInput.parentElement?.after(wrap);
     D.addEventListener('change', (e)=>{
       if (e.target?.id !== 'langQuick') return;
       const v = e.target.value || ''; const prov = provider();
@@ -101,7 +100,6 @@
     D.body.appendChild(form); form.submit(); setTimeout(()=>form.remove(), 500);
   });
 
-  // Auto-save all before export XLIFF
   D.addEventListener('click', async (e)=>{
     const a = e.target.closest?.('a[href^="export.php"]'); if(!a) return;
     e.preventDefault();

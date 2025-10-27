@@ -1,6 +1,6 @@
 <?php
 require_once __DIR__ . '/auth.php'; require_login('editor');
-@ini_set('display_errors','0'); error_reporting(E_ALL);
+@ini_set('display_errors','0'); error_reporting(EALL);
 header('Content-Type: application/json; charset=utf-8');
 ob_start();
 function json_fail($code, $msg, $extra = []){

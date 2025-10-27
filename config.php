@@ -1,7 +1,7 @@
 <?php
 return [
   'app_name' => 'XLIFF Studio',
-  'translator' => 'libre', // libre | deepl | azure | google | mymemory | mock
+  'translator' => 'libre',
   'libre_endpoint' => 'http://localhost:5000',
   'libre_api_key' => '',
   'libre_max_chars_per_call' => 8000,
@@ -14,4 +14,7 @@ return [
   'google_api_key' => '',
   'rate_limit' => ['translate_per_minute'=>60, 'burst'=>30],
   'max_chars_per_request' => 25000,
+  'users' => [
+    ['username'=>'admin', 'password'=>'admin123', 'role'=>'editor'],
+  ],
 ];

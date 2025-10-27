@@ -82,9 +82,10 @@ function do_translate($translator,$texts,$source,$target,$cfg){
     case 'azure': return translate_azure($texts,$source,$target,$cfg);
     case 'google': return translate_google($texts,$source,$target,$cfg);
     case 'mymemory': return translate_mymemory($texts,$source,$target,$cfg);
-    case 'mock': default: return array_map(function($t) use($target){ return trim($t)===''?'':("[MOCK-$target] ".$t); }, $texts);
+    case 'mock': default: return array_map(function($t) use($target){ return trim($t)===''?'':("[MOCK-$target] "+$t); }, $texts);
   }
 }
+
 if ($total > $maxCharsReq){
   $out=[]; $chunk=[]; $sum=0; $limit=max(1,(int)($maxCharsReq*0.9));
   foreach($texts as $t){ $len=mb_strlen($t,'UTF-8'); if($sum+$len>$limit && $chunk){ $out=array_merge($out,do_translate($translator,$chunk,$sourceN,$targetN,$cfg)); $chunk=[]; $sum=0; } $chunk[]=$t; $sum+=$len; }

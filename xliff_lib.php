@@ -11,7 +11,6 @@ function parse_xliff($xml){
   $xpath->registerNamespace('x2', 'urn:oasis:names:tc:xliff:document:2.0');
 
   $units = [];
-  // XLIFF 1.2 trans-unit
   foreach ($xpath->query('//x1:trans-unit') as $tu){
     $id = $tu->getAttribute('id') ?: $tu->getAttribute('resname') ?: '';
     $src = $xpath->query('x1:source', $tu)->item(0);
@@ -20,7 +19,6 @@ function parse_xliff($xml){
     $targetXml = $tgt ? inner_xml($tgt) : '';
     $units[] = ['id'=>$id, 'source'=>$sourceXml, 'target'=>$targetXml, 'node'=>$tu];
   }
-  // XLIFF 2.0 unit/segment
   foreach ($xpath->query('//x2:unit') as $unit){
     $id = $unit->getAttribute('id') ?: '';
     foreach ($xpath->query('.//x2:segment', $unit) as $seg){
@@ -38,11 +36,9 @@ function inner_xml(DOMNode $node){
 }
 function replace_targets($parsed, $targets){
   $doc = $parsed['doc']; $xpath = $parsed['xpath'];
-  // XLIFF 1.2
   foreach ($xpath->query('//x1:trans-unit') as $tu){
     $id = $tu->getAttribute('id') ?: $tu->getAttribute('resname') ?: '';
-    $src = $xpath->query('x1:source', $tu)->item(0);
-    if(!$src) continue;
+    $src = $xpath->query('x1:source', $tu)->item(0); if(!$src) continue;
     $tgt = $xpath->query('x1:target', $tu)->item(0);
     if(!$tgt){ $tgt = $doc->createElementNS('urn:oasis:names:tc:xliff:document:1.2','target'); $tu->appendChild($tgt); }
     $new = $targets[$id] ?? null; if($new===null) continue;
@@ -50,12 +46,10 @@ function replace_targets($parsed, $targets){
     $frag = $doc->createDocumentFragment(); $frag->appendXML($new);
     $tgt->appendChild($frag);
   }
-  // XLIFF 2.0
   foreach ($xpath->query('//x2:unit') as $unit){
     $id = $unit->getAttribute('id') ?: '';
     foreach ($xpath->query('.//x2:segment', $unit) as $seg){
-      $src = $xpath->query('x2:source', $seg)->item(0);
-      if(!$src) continue;
+      $src = $xpath->query('x2:source', $seg)->item(0); if(!$src) continue;
       $tgt = $xpath->query('x2:target', $seg)->item(0);
       if(!$tgt){ $tgt = $doc->createElementNS('urn:oasis:names:tc:xliff:document:2.0','target'); $seg->appendChild($tgt); }
       $new = $targets[$id] ?? null; if($new===null) continue;
