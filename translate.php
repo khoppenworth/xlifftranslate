@@ -1,41 +1,31 @@
 <?php
 require_once __DIR__ . '/auth.php'; require_login('editor');
 require_once __DIR__ . '/rate_limit.php';
-@ini_set('display_errors','0'); error_reporting(E_ALL);
-header('Content-Type: application/json; charset=utf-8');
-ob_start();
-function json_fail($code, $msg, $extra = []){
-  http_response_code($code);
-  $out = array_merge(['error'=>$msg], $extra);
-  $json = json_encode($out, JSON_UNESCAPED_UNICODE);
-  if ($json === false) { $json = '{"error":"JSON encode failed"}'; }
-  while (ob_get_level()) { ob_end_clean(); }
-  echo $json; exit;
-}
-set_exception_handler(function($e){ json_fail(500, 'Exception: '.$e->getMessage()); });
-set_error_handler(function($severity,$message,$file,$line){ json_fail(500, 'PHP error: '.$message, ['where'=>basename($file).':'.$line]); });
+header('Content-Type: application/json');
 
 $cfg = cfg();
 $rl = $cfg['rate_limit'] ?? ['translate_per_minute'=>60, 'burst'=>30];
 $cap = max(1, ((int)($rl['translate_per_minute'] ?? 60)) + (int)($rl['burst'] ?? 0));
 $ppm = max(1, (int)($rl['translate_per_minute'] ?? 60));
-if (!rate_limit_allow('translate', $cap, $ppm)) json_fail(429, 'Rate limit exceeded');
+if (!rate_limit_allow('translate', $cap, $ppm)) { http_response_code(429); echo json_encode(['error'=>'Rate limit exceeded']); exit; }
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') json_fail(405, 'POST only');
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); echo json_encode(['error'=>'POST only']); exit; }
 
-$raw = file_get_contents('php://input'); $payload = json_decode($raw, true);
-if (!is_array($payload)) json_fail(400, 'Bad JSON body');
-$clientIds   = $payload['ids'] ?? [];
+$payload = json_decode(file_get_contents('php://input'), true);
+$clientTexts = $payload['texts'] ?? [];
+$clientIds   = $payload['ids'] ?? null; // array of unit IDs (preferred path)
 $source = trim((string)($payload['source'] ?? ''));
 $target = trim((string)($payload['target'] ?? ''));
 $csrf   = $payload['csrf'] ?? '';
 $overrideProvider = strtolower(trim((string)($payload['provider'] ?? '')));
-if (!hash_equals($_SESSION['csrf'] ?? '', $csrf)) json_fail(400, 'Bad CSRF');
-if ($target==='') json_fail(400, 'Missing target language');
-if (!is_array($clientIds) || empty($clientIds)) json_fail(400, 'No ids provided');
+if (!hash_equals($_SESSION['csrf'] ?? '', $csrf)) { http_response_code(400); echo json_encode(['error'=>'Bad CSRF']); exit; }
+if ($target==='') { http_response_code(400); echo json_encode(['error'=>'Missing target language']); exit; }
 
 $translator = $overrideProvider ?: strtolower(trim((string)($cfg['translator'] ?? 'libre')));
 
+/**
+ * Provider-aware language normalization (same logic as 6.0.2)
+ */
 function norm2($code){ $code=str_replace('_','-',trim($code)); if($code==='') return ''; $parts=explode('-',$code,2); return strtolower($parts[0]); }
 function normalize_lang($provider,$code,$isTarget=true){
   $code = str_replace('_','-',trim($code));
@@ -48,31 +38,35 @@ function normalize_lang($provider,$code,$isTarget=true){
     if (preg_match('/^([A-Z]{2})-([A-Z]{2})$/',$up,$m)) return in_array($up,$whitelist,true) ? $up : $m[1];
     return substr($up,0,2);
   }
-  if ($provider==='azure') { $parts=explode('-',$code,2); return strtolower($parts[0]).(isset($parts[1])?('-'.strtoupper($parts[1])):''); }
+  if ($provider==='azure') {
+    $parts=explode('-',$code,2); return strtolower($parts[0]).(isset($parts[1])?('-'.strtoupper($parts[1])):'');
+  }
   return norm2($code);
 }
 $sourceN = $source ? normalize_lang($translator,$source,false) : '';
 $targetN = normalize_lang($translator,$target,true);
 
-function strip_xliff_inline($html){
-  $html = preg_replace('~</?g\b[^>]*>~i', '', (string)$html);
-  $html = preg_replace('~<x\b[^>]*/>~i', '', $html);
-  return $html;
-}
-if (!function_exists('curl_init')) json_fail(500, 'cURL extension not available');
-
+/**
+ * Build texts strictly from <source>…</source> of the current session XLIFF.
+ * If client provided ids[], we trust only ids and ignore clientTexts.
+ * If ids are missing, we fallback to clientTexts (legacy clients).
+ */
+$norm = [];
 $parsed = $_SESSION['parsed'] ?? null;
-if (!$parsed) json_fail(400, 'No XLIFF loaded');
-
-$mapSrc = []; foreach (($parsed['units'] ?? []) as $u) { $mapSrc[$u['id']] = (string)($u['source'] ?? ''); }
-$texts = []; foreach ($clientIds as $id) { $src = $mapSrc[$id] ?? ''; $texts[] = strip_xliff_inline($src); }
-if (!count($texts)) json_fail(400, 'No matching ids in current XLIFF');
+if (is_array($clientIds) && $parsed) {
+  // build id -> source map
+  $map = []; foreach (($parsed['units'] ?? []) as $u) { $map[$u['id']] = (string)($u['source'] ?? ''); }
+  foreach ($clientIds as $id) { $norm[] = (string)($map[$id] ?? ''); }
+} else {
+  // Legacy fallback: still *attempt* to ensure only source was sent.
+  foreach (($clientTexts ?? []) as $t) { $norm[] = (string)$t; }
+}
 
 $maxCharsReq = (int)($cfg['max_chars_per_request'] ?? 25000);
-$total=0; foreach($texts as $t) $total += mb_strlen($t,'UTF-8');
+$total=0; foreach($norm as $t) $total += mb_strlen($t,'UTF-8');
 
 function http_json($url,$method='POST',$headers=[],$body=null){
-  $ch=curl_init($url); curl_setopt_array($ch,[CURLOPT_CUSTOMREQUEST=>$method,CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>$headers,CURLOPT_POSTFIELDS=>$body,CURLOPT_TIMEOUT=>60]);
+  $ch=curl_init($url); curl_setopt_array($ch,[CURLOPT_CUSTOMREQUEST=>$method,CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>$headers,CURLOPT_POSTFIELDS'=>$body,CURLOPT_TIMEOUT=>60]);
   $resp=curl_exec($ch); $http=curl_getinfo($ch,CURLINFO_HTTP_CODE); $err=curl_error($ch); curl_close($ch); return [$http,$resp,$err];
 }
 function do_translate($translator,$texts,$source,$target,$cfg){
@@ -82,18 +76,78 @@ function do_translate($translator,$texts,$source,$target,$cfg){
     case 'azure': return translate_azure($texts,$source,$target,$cfg);
     case 'google': return translate_google($texts,$source,$target,$cfg);
     case 'mymemory': return translate_mymemory($texts,$source,$target,$cfg);
-    case 'mock': default: return array_map(function($t) use($target){ return trim($t)===''?'':("[MOCK-$target] "+$t); }, $texts);
+    case 'mock': default: return array_map(function($t) use($target){ return trim($t)===''?'':("[MOCK-$target] ".$t); }, $texts);
   }
 }
 
 if ($total > $maxCharsReq){
   $out=[]; $chunk=[]; $sum=0; $limit=max(1,(int)($maxCharsReq*0.9));
-  foreach($texts as $t){ $len=mb_strlen($t,'UTF-8'); if($sum+$len>$limit && $chunk){ $out=array_merge($out,do_translate($translator,$chunk,$sourceN,$targetN,$cfg)); $chunk=[]; $sum=0; } $chunk[]=$t; $sum+=$len; }
+  foreach($norm as $t){ $len=mb_strlen($t,'UTF-8'); if($sum+$len>$limit && $chunk){ $out=array_merge($out,do_translate($translator,$chunk,$sourceN,$targetN,$cfg)); $chunk=[]; $sum=0; } $chunk[]=$t; $sum+=$len; }
   if($chunk) $out=array_merge($out,do_translate($translator,$chunk,$sourceN,$targetN,$cfg));
-} else { $out=do_translate($translator,$texts,$sourceN,$targetN,$cfg); }
-$out=array_values($out);
-if (count($out)!==count($texts)){ $out = (count($out)<count($texts)) ? array_pad($out, count($texts), '') : array_slice($out,0,count($texts)); }
+} else { $out=do_translate($translator,$norm,$sourceN,$targetN,$cfg); }
 
-while (ob_get_level()) { ob_end_clean(); }
-echo json_encode(['translations'=>$out], JSON_UNESCAPED_UNICODE);
-exit;
+$out=array_values($out);
+if (count($out)!==count($norm)){ $out = (count($out)<count($norm)) ? array_pad($out, count($norm), '') : array_slice($out,0,count($norm)); }
+echo json_encode(['translations'=>$out]);
+
+# --- Providers (same as 6.0.2) ---
+function translate_libre(array $texts,string $source,string $target,array $cfg): array {
+  $endpoint=rtrim((string)($cfg['libre_endpoint'] ?? 'http://localhost:5000'),'/');
+  $apiKey=trim((string)($cfg['libre_api_key'] ?? ''));
+  $maxChars=max(1000,(int)($cfg['libre_max_chars_per_call'] ?? 8000));
+  $delayMs=max(0,(int)($cfg['libre_delay_ms'] ?? 0));
+  $out=[]; foreach($texts as $t){
+    $s=(string)$t; if (trim(strip_tags($s))===''){ $out[]=''; continue; }
+    $parts=split_text_for_limit($s,$maxChars); $pieces=[];
+    foreach ($parts as $part){ $pieces[] = libre_call_with_retry($endpoint,$apiKey,$part,$source,$target,$delayMs); }
+    $out[]=implode('',$pieces);
+  } return $out;
+}
+function libre_call_with_retry($endpoint,$apiKey,$q,$source,$target,$delayMs){
+  $payload=['q'=>$q,'source'=>$source?:'auto','target'=>$target,'format'=>'html']; if($apiKey!=='') $payload['api_key']=$apiKey;
+  $attempts=0; $max=4; $sleep=$delayMs;
+  while(true){
+    [$http,$resp,$err]=http_json("$endpoint/translate",'POST',['Content-Type: application/json'], json_encode($payload, JSON_UNESCAPED_UNICODE));
+    if ($resp!==false && $http>=200 && $http<300){ $j=json_decode($resp,true); if($delayMs>0) usleep($delayMs*1000); return (string)($j['translatedText'] ?? ''); }
+    $attempts++; if($attempts>=$max){ return ''; } usleep(($sleep + 400*$attempts)*1000);
+  }
+}
+function split_text_for_limit(string $text,int $maxChars): array {
+  if (mb_strlen($text,'UTF-8') <= $maxChars) return [$text];
+  $chunks=[]; $cur=''; $len=mb_strlen($text,'UTF-8');
+  for($i=0;$i<$len;$i++){ $ch=mb_substr($text,$i,1,'UTF-8'); if(mb_strlen($cur,'UTF-8')+1 > $maxChars){ $chunks[]=$cur; $cur=''; } $cur.=$ch;
+    if(($ch==='.'||$ch==='!'||$ch==='?') && mb_strlen($cur,'UTF-8')>=($maxChars*0.6)){ $chunks[]=$cur; $cur=''; } }
+  if($cur!=='') $chunks[]=$cur; return $chunks;
+}
+function translate_deepl(array $texts,string $source,string $target,array $cfg): array {
+  $endpoint=(string)($cfg['deepl_endpoint'] ?? 'https://api-free.deepl.com/v2/translate');
+  $key=trim((string)($cfg['deepl_api_key'] ?? '')); if($key==='') return array_map(fn($t)=>$t,$texts);
+  $post=['target_lang'=>$target]; if($source) $post['source_lang']=$source;
+  foreach($texts as $t) $post['text'][]=$t;
+  [$http,$resp,$err]=http_json($endpoint,'POST',['Authorization: DeepL-Auth-Key '.$key,'Content-Type: application/x-www-form-urlencoded'], http_build_query($post));
+  if($resp===false || $http>=400) return array_map(fn($t)=>$t,$texts);
+  $data=json_decode($resp,true); $out=[]; foreach(($data['translations']??[]) as $row) $out[]=(string)($row['text']??''); return $out;
+}
+function translate_azure(array $texts,string $source,string $target,array $cfg): array {
+  $endpoint=(string)($cfg['azure_endpoint'] ?? 'https://api.cognitive.microsofttranslator.com/translate?api-version=3.0');
+  $key=trim((string)($cfg['azure_key'] ?? '')); $region=trim((string)($cfg['azure_region'] ?? ''));
+  if($key===''||$region==='') return array_map(fn($t)=>$t,$texts);
+  $url=$endpoint.'&to='.urlencode($target).($source?'&from='.urlencode($source):'');
+  $body=[]; foreach($texts as $t) $body[]=['Text'=>$t];
+  [$http,$resp,$err]=http_json($url,'POST',['Ocp-Apim-Subscription-Key: '.$key,'Ocp-Apim-Subscription-Region: '.$region,'Content-Type: application/json'], json_encode($body, JSON_UNESCAPED_UNICODE));
+  if($resp===false || $http>=400) return array_map(fn($t)=>$t,$texts);
+  $data=json_decode($resp,true); $out=[]; foreach($data as $chunk) $out[]=(string)($chunk['translations'][0]['text']??''); return $out;
+}
+function translate_google(array $texts,string $source,string $target,array $cfg): array {
+  $apiKey=trim((string)($cfg['google_api_key'] ?? '')); if($apiKey==='') return array_map(fn($t)=>$t,$texts);
+  $url="https://translation.googleapis.com/language/translate/v2?key=".urlencode($apiKey);
+  $post=['target'=>$target,'format'=>'html']; if($source) $post['source']=$source; foreach($texts as $t) $post['q'][]=$t;
+  [$http,$resp,$err]=http_json($url,'POST',['Content-Type: application/json'], json_encode($post, JSON_UNESCAPED_UNICODE));
+  if($resp===false || $http>=400) return array_map(fn($t)=>$t,$texts);
+  $data=json_decode($resp,true); $out=[]; foreach(($data['data']['translations']??[]) as $row) $out[]=(string)($row['translatedText']??''); return $out;
+}
+function translate_mymemory(array $texts,string $source,string $target,array $cfg): array {
+  $out=[]; foreach($texts as $q){ $url='https://api.mymemory.translated.net/get?q='.rawurlencode($q).'&langpair='.rawurlencode(($source?:'auto').'|'.$target);
+    [$http,$resp,$err]=http_json($url,'GET',[]); if($resp===false || $http>=400){ $out[]=$q; continue; } $data=json_decode($resp,true); $out[]=(string)($data['responseData']['translatedText'] ?? $q); }
+  return $out;
+}
