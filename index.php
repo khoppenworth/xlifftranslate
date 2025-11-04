@@ -1,10 +1,10 @@
 <?php
 require_once __DIR__ . '/auth.php'; require_login('viewer');
 require_once __DIR__ . '/xliff_lib.php';
+require_once __DIR__ . '/http_client.php';
 $cfg=cfg(); if (empty($_SESSION['csrf'])) $_SESSION['csrf']=bin2hex(random_bytes(16));
 $err=''; $info=''; $canEdit = (current_role() !== 'viewer');
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
-function http_json($url,$method='POST',$headers=[],$body=null){ $ch=curl_init($url); curl_setopt_array($ch,[CURLOPT_CUSTOMREQUEST=>$method,CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>$headers,CURLOPT_POSTFIELDS=>$body,CURLOPT_TIMEOUT=>30]); $resp=curl_exec($ch); $http=curl_getinfo($ch,CURLINFO_HTTP_CODE); $err=curl_error($ch); curl_close($ch); return [$http,$resp,$err]; }
 function sanitize_fragment($html){ $html=preg_replace('~<\s*(script|style)[^>]*>.*?<\s*/\s*\1\s*>~is','',$html??''); $html=preg_replace('/\son[a-z]+\s*=\s*(\"[^\"]*\"|\'[^\']*\'|[^\s>]+)/i','',$html); $html=preg_replace('/(href|src)\s*=\s*([\'\"])javascript:[^\\2]*\\2/i','',$html); return $html; }
 
 if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action']) && hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')){
@@ -23,8 +23,9 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action']) && hash_equal
             $parsed=parse_xliff($data);
             $endpoint=rtrim((string)($cfg['libre_endpoint'] ?? 'http://localhost:5000'),'/');
             $sample=''; foreach ($parsed['units'] as $i=>$u){ if ($i>=20) break; $sample.=strip_tags($u['source'])." "; }
-            if (!$parsed['sourceLang'] && trim($sample)!==''){ [$http,$resp,$e] = http_json($endpoint.'/detect','POST',['Content-Type: application/json'], json_encode(['q'=>$sample], JSON_UNESCAPED_UNICODE)); $j=json_decode($resp,true); if(is_array($j) && isset($j[0]['language'])) $parsed['sourceLang']=$j[0]['language']; }
+            if (!$parsed['sourceLang'] && trim($sample)!==''){ [$http,$resp,$e] = http_json($endpoint.'/detect','POST',['Content-Type: application/json'], json_encode(['q'=>$sample], JSON_UNESCAPED_UNICODE), 30); $j=json_decode($resp,true); if(is_array($j) && isset($j[0]['language'])) $parsed['sourceLang']=$j[0]['language']; }
             foreach ($parsed['units'] as &$u){ $u['source']=sanitize_fragment($u['source']); $u['target']=sanitize_fragment($u['target']); }
+            unset($u);
             $_SESSION['parsed']=$parsed; $_SESSION['targets']=[]; $info='Loaded '.count($parsed['units']).' units.' . ($parsed['sourceLang']?' Source: '.$parsed['sourceLang']:'');
           } catch (Throwable $e){ $err='Parse error: '.h($e->getMessage()); }
         }

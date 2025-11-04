@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/auth.php'; require_login('editor');
 require_once __DIR__ . '/rate_limit.php';
+require_once __DIR__ . '/http_client.php';
 header('Content-Type: application/json');
 
 $cfg = cfg();
@@ -65,10 +66,6 @@ if (is_array($clientIds) && $parsed) {
 $maxCharsReq = (int)($cfg['max_chars_per_request'] ?? 25000);
 $total=0; foreach($norm as $t) $total += mb_strlen($t,'UTF-8');
 
-function http_json($url,$method='POST',$headers=[],$body=null){
-  $ch=curl_init($url); curl_setopt_array($ch,[CURLOPT_CUSTOMREQUEST=>$method,CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>$headers,CURLOPT_POSTFIELDS'=>$body,CURLOPT_TIMEOUT=>60]);
-  $resp=curl_exec($ch); $http=curl_getinfo($ch,CURLINFO_HTTP_CODE); $err=curl_error($ch); curl_close($ch); return [$http,$resp,$err];
-}
 function do_translate($translator,$texts,$source,$target,$cfg){
   switch($translator){
     case 'libre': return translate_libre($texts,$source,$target,$cfg);
